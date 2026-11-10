@@ -752,10 +752,52 @@ class PlayTests(unittest.TestCase):
         # Phase 11: shadnet --watchdog keeps the co-op server running (it starts it again after a
         # crash or a hang); stopping stops the watchdog first, so it starts nothing again.
         install = Path('C:/Co-op')
-        self.assertEqual(coop.server_command(install), [str(install / 'server' / 'shadnet.exe'), '--watchdog'])
+        with mock.patch.object(coop.sys, 'platform', 'win32'), mock.patch.object(coop, 'SERVER_EXE', 'shadnet.exe'):
+            self.assertEqual(coop.server_command(install), [str(install / 'server' / 'shadnet.exe'), '--watchdog'])
         found = [(11, 'shadnet.exe', 'shadnet.exe --beat'), (12, 'python.exe', 'bb_dummy_server.py'),
                  (10, 'shadnet.exe', 'shadnet.exe --watchdog')]
         self.assertEqual([pid for pid, _name, _command in coop.stop_order(found)], [10, 11, 12])
+
+    def test_linux_runs_the_server_built_beside_the_port(self):
+        # Linux from source: the install is bbport/ and shadnet stays in server/build beside it, whose
+        # ../VERSION.txt is not the install's, so Start server gives shadnet the release's version.
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(coop.sys, 'platform', 'linux'), mock.patch.object(coop, 'SERVER_EXE', 'shadnet'):
+            root = Path(folder)
+            install = root / 'bbport'
+            built = root / 'server' / 'build'
+            built.mkdir(parents=True)
+            (root / 'backend').mkdir()
+            install.mkdir()
+            (install / 'VERSION.txt').write_text('BBSC: Yharnam Together v1.4.0 (Linux)\n', encoding='utf-8')
+            self.assertEqual(coop.server_folder(install), install / 'server', 'no shadnet built: the release layout')
+            (built / 'shadnet').write_bytes(b'')
+            self.assertEqual(coop.server_command(install), [str(built / 'shadnet'), '--watchdog'])
+            self.assertEqual(coop.backend_folder(install), root / 'backend')
+            with mock.patch.object(coop, 'servers_running', return_value=False), \
+                    mock.patch.object(coop, 'port_open', return_value=True), \
+                    mock.patch.dict(coop.os.environ, {}, clear=False), \
+                    mock.patch.object(coop.subprocess, 'Popen') as popen:
+                coop.os.environ.pop('BB_RELEASE_VERSION', None)
+                coop.start_servers(install, '100.66.59.61', wait_s=0)
+            self.assertEqual(popen.call_args.kwargs['env']['BB_RELEASE_VERSION'], '1.4.0')
+            self.assertEqual(popen.call_args.kwargs['cwd'], built)
+            self.assertTrue(popen.call_args.kwargs['start_new_session'], 'closing the launcher leaves it running')
+            # A server of the install's own (a packaged release) reads ../VERSION.txt itself.
+            (install / 'server').mkdir()
+            (install / 'server' / 'shadnet').write_bytes(b'')
+            self.assertEqual(coop.server_folder(install), install / 'server')
+            # Its processes, from /proc: shadnet from this server folder, the backend there; another
+            # shadnet and this launcher are not ours.
+            server = str((install / 'server').resolve())
+            backend = str((root / 'backend').resolve())
+            processes = [(10, server + '/shadnet', [server + '/shadnet', '--watchdog']),
+                         (11, server + '/shadnet', [server + '/shadnet', '--beat']),
+                         (12, '/usr/bin/python3.14', ['python3', backend + '/bb_dummy_server.py', '--port', '20443']),
+                         (13, '/opt/other/shadnet', ['/opt/other/shadnet']),
+                         (coop.os.getpid(), server + '/shadnet', [])]
+            found = coop.our_linux_processes(install, processes)
+            self.assertEqual([pid for pid, _name, _command in coop.stop_order(found)], [10, 11, 12])
 
     def test_the_server_log_reaches_shadnet_txt(self):
         # Players' "Failed to acquire Bloodborne server information" (2026-10-22): user\\log\\shadnet.txt

@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -42,6 +43,9 @@ SHADNET_PORT, WEBAPI_PORT, MATCHING_PORT, BACKEND_PORT = 31313, 31315, 31314, 20
 GAME_SERVER = 'https://ss4.scej-network.jp:20443'
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 DETACHED = getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+# DETACHED's part on Linux: a session of its own, so closing the launcher (or its terminal) leaves the
+# server running, as on Windows.
+DETACH_SESSION = sys.platform != 'win32'
 
 # The answers, as 1 - SETUP asked them (FPS is gone: co-op is always the fixed 60 FPS mode). No party
 # settings: the team is made in the game's team screen (phase 6). `role` 'host' runs the co-op server.
@@ -1500,9 +1504,45 @@ def server_environment(host_ip, env=None):
     return env
 
 
+SERVER_EXE = 'shadnet.exe' if sys.platform == 'win32' else 'shadnet'
+
+
+def server_folder(install):
+    """Where shadnet is: the install's server\\ (the release). Built from source on Linux, the install
+    is bbport/ and shadnet stays in the server's own build folder beside it (server/build, as
+    docs/BUILDING.md builds it), used when the install has no server of its own."""
+    install = Path(install)
+    folder = install / 'server'
+    if sys.platform != 'win32' and not (folder / SERVER_EXE).is_file():
+        built = install.parent / 'server' / 'build'
+        if (built / SERVER_EXE).is_file():
+            return built
+    return folder
+
+
+def backend_folder(install):
+    """The Python backend's folder: the install's backend\\, or the source tree's beside bbport/ on Linux."""
+    install = Path(install)
+    folder = install / 'backend'
+    if sys.platform != 'win32' and not folder.is_dir() and (install.parent / 'backend').is_dir():
+        return install.parent / 'backend'
+    return folder
+
+
+def release_version_of(install):
+    """The release's version in the install's VERSION.txt ('1.4.0'), '' without one: the pattern of the
+    launcher's coop_release_version and of the server's own ReleaseVersionOf."""
+    try:
+        first = (Path(install) / 'VERSION.txt').read_text(encoding='utf-8').splitlines()[0]
+    except (OSError, IndexError):
+        return ''
+    match = re.search(r'v(\d+\.\d+\.\d+\S*)', first)
+    return match.group(1) if match else ''
+
+
 def server_command(install):
     """shadnet under its watchdog (phase 11): started again after a crash or a hang."""
-    return [str(Path(install) / 'server' / 'shadnet.exe'), '--watchdog']
+    return [str(server_folder(install) / SERVER_EXE), '--watchdog']
 
 
 def start_servers(install, host_ip, wait_s=10.0):
@@ -1510,30 +1550,38 @@ def start_servers(install, host_ip, wait_s=10.0):
     backend port itself), and the Python backend only when nothing answers that port. Returns the
     lines to show."""
     install = Path(install)
-    server = install / 'server'
+    server = server_folder(install)
     log = install / 'user' / 'log'
     log.mkdir(parents=True, exist_ok=True)
     said = []
     if not servers_running():
         env = server_environment(host_ip)
+        if server != install / 'server' and 'BB_RELEASE_VERSION' not in env:
+            # shadnet reads the release's version from ../VERSION.txt, the install's in a release; from
+            # the source tree's build folder that is not the install's, so the launcher says it (else the
+            # server runs "dev" and refuses the games of the release).
+            version = release_version_of(install)
+            if version:
+                env['BB_RELEASE_VERSION'] = version
         try:
             shutil.copy2(log / 'shadnet.txt', log / 'shadnet.prev.txt')
         except OSError:
             pass  # no log yet
         with open(log / 'shadnet.txt', 'w', encoding='utf-8') as out:
             subprocess.Popen(server_command(install), cwd=server, env=env, stdout=out, stderr=subprocess.STDOUT,
-                             stdin=subprocess.DEVNULL, creationflags=NO_WINDOW | DETACHED)
+                             stdin=subprocess.DEVNULL, creationflags=NO_WINDOW | DETACHED,
+                             start_new_session=DETACH_SESSION)
         said.append('Started the co-op server.')
     deadline = time.monotonic() + wait_s
     while time.monotonic() < deadline and not (servers_running() and port_open(BACKEND_PORT)):
         time.sleep(0.25)
     if not port_open(BACKEND_PORT):
-        backend = install / 'backend'
+        backend = backend_folder(install)
         with open(log / 'backend.txt', 'a', encoding='utf-8') as out:
             subprocess.Popen(script_command(install, backend / 'bb_dummy_server.py', '--address', host_ip, '--port',
                                             BACKEND_PORT, '--shadnet-webapi', f'http://{host_ip}:{WEBAPI_PORT}'),
                              cwd=backend, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                             creationflags=NO_WINDOW | DETACHED)
+                             creationflags=NO_WINDOW | DETACHED, start_new_session=DETACH_SESSION)
         said.append('Started the backend.')
     if not servers_running():
         said.append(f'The co-op server did not start (log: {log / "shadnet.txt"}).')
@@ -1561,8 +1609,46 @@ def console_text(data):
     return data.decode('latin-1')
 
 
+def linux_processes(proc='/proc'):
+    """(pid, program, arguments) of every process this user may look at, read from /proc."""
+    found = []
+    try:
+        entries = os.listdir(proc)
+    except OSError:
+        return found
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            program = os.readlink(os.path.join(proc, entry, 'exe'))
+            with open(os.path.join(proc, entry, 'cmdline'), 'rb') as file:
+                arguments = [part.decode('utf-8', 'replace') for part in file.read().split(b'\0') if part]
+        except OSError:
+            continue  # gone, or another user's
+        found.append((int(entry), program.removesuffix(' (deleted)'), arguments))  # rebuilt while running
+    return found
+
+
+def our_linux_processes(install, processes=None):
+    """our_processes on Linux: shadnet run from this install's server folder, and the backend there."""
+    server = str(server_folder(install).resolve())
+    backend = str(backend_folder(install).resolve())
+    found = []
+    for pid, program, arguments in linux_processes() if processes is None else processes:
+        if pid == os.getpid():
+            continue
+        command = ' '.join(arguments)
+        if os.path.basename(program) == SERVER_EXE and os.path.dirname(program) == server:
+            found.append((pid, SERVER_EXE, command))
+        elif any(os.path.basename(part) == 'bb_dummy_server.py' for part in arguments) and backend in command:
+            found.append((pid, os.path.basename(program), command))
+    return found
+
+
 def our_processes(install):
     """(pid, name, command line) of this install's shadnet (its watchdog too) and backend."""
+    if sys.platform != 'win32':
+        return our_linux_processes(install)
     install = str(Path(install).resolve()).lower()
     # UTF-8 out, so an install path in any language comes back as it is (not through the OEM code page).
     script = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
@@ -1595,7 +1681,13 @@ def stop_order(found):
 def stop_servers(install):
     stopped = 0
     for pid, _name, _command in stop_order(our_processes(install)):
-        subprocess.run(['taskkill', '/PID', str(pid), '/F'], capture_output=True, creationflags=NO_WINDOW)
+        if sys.platform != 'win32':
+            try:
+                os.kill(pid, signal.SIGKILL)  # as taskkill /F: at once, the watchdog first
+            except OSError:
+                continue  # already gone (the watchdog's child goes with it at times)
+        else:
+            subprocess.run(['taskkill', '/PID', str(pid), '/F'], capture_output=True, creationflags=NO_WINDOW)
         stopped += 1
     return stopped
 
