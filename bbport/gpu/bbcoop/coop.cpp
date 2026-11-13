@@ -149,12 +149,12 @@ u64 GetLocalPlayer();
 bool CutscenePlaying();
 }
 
-// LINUX_FORK: 1 while the game's cutscene player plays a cutscene.
+// Linux: 1 while the game's cutscene player plays a cutscene.
 extern "C" int bbcoop_cutscene_playing(void) {
     return Core::Bloodborne::Coop::CutscenePlaying() ? 1 : 0;
 }
 
-// LINUX_FORK (Rijaak/BBSC---Linux-and-Steamdeck): whether a save is loaded (the game's own pointer to
+// Linux: whether a save is loaded (the game's own pointer to
 // its player character): 0 on the title screen, its menus and loading screens.
 extern "C" int bbcoop_player_in_world(void) {
     return Core::Bloodborne::Coop::GetLocalPlayer() >= 0x10000 ? 1 : 0;

@@ -8378,7 +8378,7 @@ bool HandleEvent(const SDL_Event& event) {
     }
 }
 
-// LINUX_FORK: the menus' letterbox (Render) draws while no save is loaded or a cutscene plays. The presenter asks
+// Linux: the menus' letterbox (Render) draws while no save is loaded or a cutscene plays. The presenter asks
 // Visible() before Render runs, so this cannot wait for Render's rectangle: it asks for the overlay on
 // every frame without a save, and Render draws bars only where the output is not 16:9 (an empty
 // overlay frame on a 16:9 title screen otherwise). Its changes go to the log.
@@ -8599,7 +8599,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent, v
         textures_logged = textures;
         std::printf("Overlay: %d textures, pool of %d sets\n", textures, OverlayDescriptorSets);
     }
-    // LINUX_FORK (Rijaak/BBSC---Linux-and-Steamdeck): with no save loaded (the title screen, its menus,
+    // Linux: with no save loaded (the title screen, its menus,
     // loading screens) on an output that is not 16:9, black bars cover what lies past the game's own
     // 16:9 screen, as a 16:9 game shows on a 16:10 or 21:9 display. The UI movies take the output's
     // shape (so in the game the HUD sits at the edges), and on the title that showed art never meant

@@ -323,7 +323,7 @@ MAP_3D = [('0', ('Off', 'Выкл.')), ('1', ('Prerendered', 'Заранее н�
 
 
 def path_ignoring_case(root, *parts):
-    """LINUX_FORK (Rijaak/BBSC---Linux-and-Steamdeck): root/parts as the game's files spell them, whatever
+    """Linux: root/parts as the game's files spell them, whatever
     the case (map/MapStudio or map/mapstudio): a dump keeps the PS4's names, Windows ignores case and
     Linux does not. None when a part is not there."""
     at = Path(root)
@@ -464,7 +464,7 @@ _display_modes = None
 
 
 def linux_display_modes():
-    """LINUX_FORK (Rijaak/BBSC---Linux-and-Steamdeck): (modes, desktop) on Linux, where Win32 has none
+    """Linux: (modes, desktop) on Linux, where Win32 has none
     to give: xrandr's modes of the primary output (X11, or Xwayland under a Wayland desktop such as
     the Steam Deck's), its current one as the desktop; Tk's screen size when xrandr is not there. On
     a Steam Deck that is 1280x800 (16:10), which the dropdown then offers as the other monitors' own
@@ -507,7 +507,7 @@ def display_modes():
     """(modes, desktop) of the primary monitor from Win32 (EnumDisplaySettingsW): every resolution it
     has and its current one; ([], None) when Windows cannot say. Read once per run."""
     global _display_modes
-    if _display_modes is None and not IS_WINDOWS:
+    if _display_modes is None and sys.platform != 'win32':
         _display_modes = linux_display_modes()
     if _display_modes is None:
         _display_modes = ([], None)
@@ -546,9 +546,10 @@ def display_modes():
         except (AttributeError, OSError, ImportError):
             pass
     return _display_modes
-# LINUX_FORK: bbport.ini light_grid (scripts/patches.py LIGHT_GRIDS): the community Light Grid patches.
-LIGHT_GRID_CHOICES = [('auto', ('Auto (Steam Deck grid at 1280 × 800, else the game\'s own)',)),
-                      ('off', ("The game's own",)),
+# Linux: bbport.ini light_grid (scripts/patches.py LIGHT_GRIDS): the community Light Grid patches.
+LIGHT_GRID_CHOICES = [('auto', ('Auto (Steam Deck grid at 1280 × 800, else the game\'s own)',
+                                'Авто (сетка Steam Deck при 1280 × 800, иначе собственная сетка игры)')),
+                      ('off', ("The game's own", 'Собственная сетка игры')),
                       ('1280x800', ('1280 × 800 (Steam Deck)',)), ('1080p', ('1920 × 1080',)),
                       ('1440p', ('2560 × 1440',)), ('4k', ('3840 × 2160',))]
 LIVE = [('auto', ('Auto (by graphics card)', 'Авто (по видеокарте)')), ('0', ('Off (faster)', 'Выключена (быстрее)')),
@@ -584,7 +585,7 @@ READBACKS = [('', ('Relaxed (default)', 'Relaxed (по умолчанию)')), (
 # Frame cap of the unlocked mode (BB_FPS_LIMIT), Advanced only. '' is Auto: no cap while frame
 # generation is off, half the display refresh (at most 120) while it is on (see game_environment).
 # The caps above 120 carry the warning mark: the game's movement timing breaks above about 120 FPS.
-FRAME_CAPS = [('', ('Auto', 'Авто')),
+FRAME_CAPS = [('', ('Auto', 'Авто')), ('30', ('30 FPS',)),  # 30: unlocked co-op on a Steam Deck
               ('60', ('60 FPS',)), ('90', ('90 FPS',)), ('120', ('120 FPS',)), ('144', ('144 FPS  ⚠',)),
               ('165', ('165 FPS  ⚠',)), ('240', ('240 FPS  ⚠',)), ('0', ('No limit  ⚠', 'Без ограничения  ⚠'))]
 
@@ -5374,7 +5375,12 @@ class Launcher:
                  _("The grid the game sorts its lights into (community Light Grid patches). A smaller one is "
                    "faster; match it to the output. Auto: the Steam Deck's 1280 × 800 grid at that output, the "
                    "game's own grid at any other. Set at start: after changing the output in the game, restart "
-                   "it. Lights missing or cut off near the screen's edges: choose the game's own.",))
+                   "it. Lights missing or cut off near the screen's edges: choose the game's own.",
+                   'Сетка, по которой игра раскладывает источники света (патчи сообщества Light Grid). Меньшая '
+                   'быстрее; подберите её под вывод. Авто: сетка Steam Deck 1280 × 800 при таком выводе, '
+                   'собственная сетка игры при любом другом. Задаётся при запуске: сменив вывод в игре, '
+                   'перезапустите её. Если свет пропадает или обрезается у краёв экрана, выберите собственную '
+                   'сетку игры.'))
         self.check(f, 'sharpen', 'ini', _('Sharpening (RCAS)', 'Резкость (RCAS)'))
         holder = self.tk.Frame(f, bg=CARD)
         Slider(self, holder, self.var('sharpness', 'ini'), 0.0, 2.0, 300).pack(side='left')

@@ -282,7 +282,7 @@ std::string AreaName(std::int32_t name_id) {
 // area's map picture and 3D view drawn ahead into the saves folder (bb-probe --prepare-map, which
 // the launcher runs with a progress bar), skipping what is drawn already. Prints a line an area
 // ("Map prepare: 3/24 m24_01_00_00"); 0 when done, 1 when the game's files are not there.
-// LINUX_FORK (Rijaak/BBSC---Linux-and-Steamdeck): `relative` under `root` as the game's files spell it,
+// Linux: `relative` under `root` as the game's files spell it,
 // whatever the case (map/MapStudio, map/mapstudio, …): a dump keeps the PS4's names and Windows
 // ignores case, Linux does not. Each part is taken as it is when it exists, else the folder's
 // entry equal to it ignoring case; the path as given when none is.
@@ -318,7 +318,7 @@ extern "C" int bbport_prepare_map(const char* dvdroot, const char* user_dir) {
         // mAA_BB_00_00.msb.dcx: one area; the others (_00_01, …) are its variants.
         const std::string name = entry.path().filename().string();
         unsigned aa = 0, bb = 0;
-        std::string lower = name;  // LINUX_FORK: M24_01_00_00.MSB.DCX as well
+        std::string lower = name;  // Linux: M24_01_00_00.MSB.DCX as well
         std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
         if (lower.size() == 20 && lower.ends_with("_00_00.msb.dcx") && std::sscanf(lower.c_str(), "m%2u_%2u", &aa, &bb) == 2) {
             areas.push_back(aa << 24 | bb << 16);

@@ -1004,7 +1004,7 @@ bool CutsceneSkipPressed();
 // (false: nothing to show).
 CutsceneVote::Pad CutsceneVotePad(bool options);
 bool CutsceneVoteView(u32& want, u32& watchers);
-// LINUX_FORK: the cutscene player is playing a cutscene (alone or in a party).
+// Linux: the cutscene player is playing a cutscene (alone or in a party).
 bool CutscenePlaying();
 // The rig's cutscene-options: Options pressed once the next cutscene has played `after_ms`.
 void ArmCutsceneOptions(s64 after_ms);

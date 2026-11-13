@@ -244,7 +244,7 @@ def validate_patch_requirements(names, game):
     return names
 
 
-# LINUX_FORK (Rijaak/BBSC---Linux-and-Steamdeck): the community "Light Grid" patches (Kyo) set the
+# Linux: the community "Light Grid" patches (Kyo) set the
 # size of the grid the game sorts its lights into (normally the PS4's 1920x1080; "use the version
 # that matches your window/fullscreen resolution, not the render resolution"). bbport.ini
 # light_grid (launcher: Graphics > Light grid):

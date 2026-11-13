@@ -1884,7 +1884,7 @@ bool CutsceneVoteView(u32& want, u32& watchers) {
     return shown != 0;
 }
 
-// LINUX_FORK (Rijaak/BBSC---Linux-and-Steamdeck): a cutscene is playing (the cutscene player in its
+// Linux: a cutscene is playing (the cutscene player in its
 // prologue-wait or play step, not stuck in it), alone or in a party: the overlay letterboxes it on an
 // output that is not 16:9, as the title screen (art past the game's 16:9 screen showed under it).
 bool CutscenePlaying() {

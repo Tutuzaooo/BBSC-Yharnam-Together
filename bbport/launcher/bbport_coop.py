@@ -1296,7 +1296,7 @@ def save_files(user):
     files = {}
 
     def add_tree(folder):
-        # LINUX_FORK: os.walk follows linked folders (a save folder linked to an older install's,
+        # Linux: os.walk follows linked folders (a save folder linked to an older install's,
         # README-Linux.txt); Path.rglob does not before Python 3.13.
         found = []
         for root, _dirs, names in os.walk(folder, followlinks=True):
@@ -1377,7 +1377,7 @@ def prune_launcher_backups(install, kept=KEPT_LAUNCHER_BACKUPS):
 
 
 def clear_keeping_links(folder):
-    """LINUX_FORK: empties a save folder for a restore, keeping its linked folders (README-Linux.txt,
+    """Linux: empties a save folder for a restore, keeping its linked folders (README-Linux.txt,
     "Using your old save folder": user/savedata/1 a link to an older install's saves): their files
     go, the links and what they point to stay, so the restore writes through them."""
     folder = Path(folder)

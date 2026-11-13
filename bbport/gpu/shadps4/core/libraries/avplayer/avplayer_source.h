@@ -214,7 +214,7 @@ private:
     std::atomic_bool m_is_looping = false;
     std::atomic_bool m_is_paused = false;
     std::atomic_bool m_is_eof = false;
-    // LINUX_FORK: set as each decoder thread ends (the demuxer waits on these instead of joining).
+    // Linux: set as each decoder thread ends (the demuxer waits on these instead of joining).
     std::atomic_bool m_video_decoder_done = false;
     std::atomic_bool m_audio_decoder_done = false;
 

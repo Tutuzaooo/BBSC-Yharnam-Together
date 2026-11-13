@@ -601,7 +601,7 @@ void AvPlayerSource::DemuxerThread(std::stop_token stop) {
     m_video_buffers_cv.Notify();
     m_audio_buffers_cv.Notify();
 
-    // LINUX_FORK (Rijaak/BBSC---Linux-and-Steamdeck, from its 0.0.2.4 fix): wait for the decoders
+    // Linux (Rijaak/BBSC---Linux-and-Steamdeck, from its 0.0.2.4 fix): wait for the decoders
     // to drain instead of joining their threads. Joining them here while sceAvPlayerStop on the
     // game thread (skipping or ending the title movie) joined the same threads through Stop()
     // gave one thread two joiners: the game froze on its way back to the title screen, every
@@ -708,7 +708,7 @@ Frame AvPlayerSource::PrepareVideoFrame(GuestBuffer buffer, const AVFrame& frame
 }
 
 void AvPlayerSource::VideoDecoderThread(std::stop_token stop) {
-    // LINUX_FORK: tells the demuxer this decoder is done, however it leaves.
+    // Linux: tells the demuxer this decoder is done, however it leaves.
     struct DoneFlag {
         std::atomic_bool& done;
         ~DoneFlag() { done = true; }
@@ -835,7 +835,7 @@ Frame AvPlayerSource::PrepareAudioFrame(GuestBuffer buffer, const AVFrame& frame
 }
 
 void AvPlayerSource::AudioDecoderThread(std::stop_token stop) {
-    // LINUX_FORK: tells the demuxer this decoder is done, however it leaves.
+    // Linux: tells the demuxer this decoder is done, however it leaves.
     struct DoneFlag {
         std::atomic_bool& done;
         ~DoneFlag() { done = true; }

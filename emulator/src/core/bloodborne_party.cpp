@@ -3759,7 +3759,7 @@ std::map<std::string, std::string> SaveFilesUnder(const fs::path& root) {
         }
     };
     const auto add_tree = [&](const fs::path& folder) {
-        // LINUX_FORK: into linked folders too (README-Linux.txt: user/savedata/1 can be a link to
+        // Linux: into linked folders too (README-Linux.txt: user/savedata/1 can be a link to
         // an older install's saves); the backup holds their files.
         for (auto it = fs::recursive_directory_iterator(
                  folder, fs::directory_options::follow_directory_symlink, error);
