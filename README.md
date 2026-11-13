@@ -1,3 +1,8 @@
+> **🐧 Linux port (unofficial).** This fork runs BBSC: Yharnam Together natively on Linux (no Proton).
+> **Download the AppImage from [Releases](../../releases/latest).** Co-op works with Windows players on the same version.
+> It is not a release of the Yharnam Together team; the port is proposed upstream in
+> [PR #571](https://github.com/Amanises-Yharnam-Together/BBSC-Yharnam-Together/pull/571). The rest of this README is the original project's.
+
 # Yharnam Together: Bloodborne Seamless Co-op
 
 Seamless co-op for **Bloodborne** on PC, in the spirit of
