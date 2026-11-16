@@ -46,6 +46,10 @@ git -C "$src" submodule update -q --init bbport/gpu/third_party/fsr-vulkan bbpor
     bbport/gpu/third_party/magic_enum bbport/gpu/third_party/miniz bbport/gpu/third_party/xbyak bbport/third_party/LibAtrac9 \
     server/externals/protobuf
 cp "$repo/bbport/VERSION.txt" "$repo/bbport/event-reference.json" "$src/bbport/"
+# FSR 4's assets with their faster passes (opt/, tools/fsr4_optimize.sh) when this PC has them: the
+# package carries them, as the Windows one does. Without them the launcher downloads the assets, and
+# opt/ only where spirv-cross and glslang are installed.
+if [[ -d $repo/bbport/fsr4_shaders ]]; then cp -r "$repo/bbport/fsr4_shaders" "$src/bbport/"; fi
 revision=$(git -C "$src" rev-parse HEAD)
 
 echo "== building (the log of each part: $cache/build/*.log)"
