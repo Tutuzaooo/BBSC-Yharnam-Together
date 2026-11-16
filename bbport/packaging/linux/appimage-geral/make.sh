@@ -3,7 +3,7 @@
 # Ubuntu 24.04 container (glibc 2.39, GCC 14) so it runs on every current distro: Ubuntu 24.04,
 # Debian 13, Fedora 40, SteamOS 3.7, Bazzite, Arch, CachyOS, Gentoo and newer. Needs Docker.
 # The libraries Ubuntu has too old are built at the versions this PC has (pacman), the ones the port
-# is known to build with. Output: bbport/dist/YharnamTogether-linux-test-geral-x86_64.AppImage
+# is known to build with. Output: bbport/dist/YharnamTogether-linux-x86_64.AppImage
 # The first run builds the container (20-40 min); later runs reuse it and build incrementally.
 set -euo pipefail
 branch=${BRANCH:-linux-port-1.5.0}

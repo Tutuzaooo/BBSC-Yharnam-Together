@@ -4,7 +4,7 @@
 # /out/$NAME.AppImage. Fails when anything in it needs a glibc newer than the container's.
 set -euo pipefail
 mkdir -p /build && exec > >(tee /build/inside.log) 2>&1  # everything also in the build folder
-NAME=${NAME:-YharnamTogether-linux-test-geral-x86_64}
+NAME=${NAME:-YharnamTogether-linux-x86_64}
 export HOME=/tmp CC=gcc-14 CXX=g++-14 BB_PGO=off
 # The port's Vulkan headers (and the other libraries built for it) for everything compiled here,
 # the DLSS bridge included (it takes "the system's"; the container's old ones are gone).
