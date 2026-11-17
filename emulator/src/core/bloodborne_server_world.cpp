@@ -2377,6 +2377,52 @@ void TickOwnWorldAfterLoad(u64 manager) {
     }
 }
 
+// Tutuzaooo 2026-11-17 (Linux): a team's world goes into a save at a load's map item hook
+// (ApplyTeamWorldOnLoad), and the Hunter's Dream has no map items: a hunt that starts there (a
+// leader hosting a friend's world alone, a guest joining in the Dream) stood in its own world
+// until its first trip, the headstones listing its own lamps (one, for a save that played only in
+// the friend's world) and the friend's coming back after the trip. So once the player stands in a
+// map with the team's world come and not yet taken, it goes in here. No load again: a team's
+// session never loads in place; the headstones read the flags as they are, the map's own look
+// (the workshop) follows at its next load. BB_TEAM_WORLD_IN_DREAM=0: at the first load, as before.
+u64 team_world_visit_checked = 0;
+void TickTeamWorldAfterLoad() {
+    static const bool wanted = [] {
+        const char* const setting = std::getenv("BB_TEAM_WORLD_IN_DREAM");
+        return !setting || std::string_view{setting} != "0";
+    }();
+    if (!wanted) {
+        return;
+    }
+    {
+        std::scoped_lock lock{team_mutex};
+        if (!team_world_due || team_world_taken || !team_world || !team_world->exists()) {
+            return;
+        }
+    }
+    const Place place = Coop::CurrentPlace();
+    if (place.state != PlaceState::Playing || place.visit == team_world_visit_checked ||
+        SteadyMilliseconds() - place.since_ms < OwnWorldAfterLoadMs || leave_home ||
+        character_slot.load() < 0 || Coop::Invading()) {
+        return;
+    }
+    team_world_visit_checked = place.visit;
+    LOG_WARNING(Debug,
+                "Co-op team world: map {:#x} (visit {}) stands without the team's world (no map "
+                "item hook took it): it goes in now",
+                place.map, place.visit);
+    ApplyTeamWorldOnLoad();
+    bool taken = false;
+    {
+        std::scoped_lock lock{team_mutex};
+        taken = team_world_taken;
+    }
+    if (!taken) {
+        LOG_WARNING(Debug, "Co-op team world: the team's world did not go in on map {:#x}",
+                    place.map);
+    }
+}
+
 // Kaniel 2026-10-16: the team's Start for a save playing alone (it joined the hunt from the
 // menu): the team's party and role as at the title's Start, and its loading screen; the session
 // is joined in place (TeamJoin), the team's world taken as the join's reload brings the blocks.
@@ -2642,6 +2688,7 @@ bool TickTeamJoin(bool ready) {
     TickTeamPlay(manager);
     TickLeaveHome(manager);
     TickOwnWorldAfterLoad(manager);
+    TickTeamWorldAfterLoad();
     TickDreamAfterGuest(manager);
     std::optional<bbcoop::TeamSession> session;
     bool in_team = false;
