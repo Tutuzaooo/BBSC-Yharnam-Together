@@ -192,17 +192,8 @@ struct LeaveHome {
     float x = 0, y = 0, z = 0, heading = 0;
     s64 left_ms = 0;
     s64 idle_since_ms = -1;
-    bool late_world = false; // TickOwnWorldAfterLoad's: no team was left
-    bool to_dream = false;   // TickDreamAfterGuest's: the Hunter's Dream, not where it stood
 };
 std::optional<LeaveHome> leave_home;      // the game's thread
-// Rijaak 2026-11-14 (Steam Deck): the flags PutOwnWorldBack last changed, and the place visit
-// TickOwnWorldAfterLoad last looked at. The game's thread.
-size_t own_world_changed = 0;
-u64 own_world_visit_checked = 0;
-// Rijaak 2026-11-15: PutOwnWorldBack put the last of this save's own world back (see
-// TickDreamAfterGuest). The game's thread.
-bool own_world_just_back = false;
 constexpr s64 LeaveHomeSettleMs = 1'000;  // out of the session and not loading this long
 constexpr s64 LeaveHomeGiveUpMs = 30'000; // still in the session: left to the game
 // Kaniel 2026-10-16: the team screen opened over the game from its System menu (TeamMenu), and
@@ -1528,8 +1519,6 @@ std::mutex sheet_mutex;
 std::string sheet_sent;
 std::chrono::steady_clock::time_point sheet_sent_at{};
 
-std::optional<HomeWorlds> ReadHomeWorlds(int slot);
-
 // The game's settings as run.py hands them on (the build fingerprint's too).
 std::string SheetSetting(const char* name, std::string_view absent) {
     const char* value = std::getenv(name);
@@ -1708,26 +1697,7 @@ bool HoldTitleLoadForTeam(u32 slot, bool fresh) {
             const auto& lobby = team_gate.Lobby();
             if (lobby && (!lobby->has_team() || lobby->team().leader() == me)) {
                 team_world_default_sent = true;
-                // LINUX_FORK (Rijaak 2026-11-15): the screen starts on the world this save
-                // last played only when it is one of the save's home worlds (a world it made:
-                // its own goes on there). Any other is another host's: after a hunt as a guest
-                // the screen started on the other host's late world, and one press hosted it
-                // (twice in one weekend on a Steam Deck). Then it starts on "A new world"; the
-                // player still picks any listed world.
-                // BB_TEAM_WORLD_DEFAULT=last: the world last played whoever made it, as before.
-                const char* const world_default = std::getenv("BB_TEAM_WORLD_DEFAULT");
-                const bool any_last = world_default && std::string_view{world_default} == "last";
-                const auto home = ReadHomeWorlds(static_cast<int>(slot));
-                const bool own_last = any_last || (home && home->Has(team_world_hint));
-                if (!own_last && !team_world_hint.empty() && !title_fresh) {
-                    LOG_INFO(Debug,
-                             "Co-op team lobby: world {} was last played and is not one this "
-                             "save made: the team screen starts on a new world",
-                             team_world_hint);
-                }
-                const auto pick = TeamScreenWorldPick(
-                    *lobby, me, own_last ? std::string_view{team_world_hint} : std::string_view{},
-                    title_fresh);
+                const auto pick = TeamScreenWorldPick(*lobby, me, team_world_hint, title_fresh);
                 if (pick) {
                     bbcoop::Envelope envelope;
                     envelope.mutable_team_request()->set_action(bbcoop::TeamRequest::WORLD);
@@ -2122,15 +2092,6 @@ void TeamJoinHunt(const std::string& invite_team) {
 
 namespace {
 
-std::optional<LeaveHome> StandingPoint();
-bool OwnWorldStillAside(int slot);
-std::optional<bool> OwnWorldHasLampOn(int slot, u32 packed_map);
-constexpr s64 OwnWorldAfterLoadMs = 1'500; // standing this long: the load's hook had its turn
-bool DreamAfterGuest() {
-    const char* const setting = std::getenv("BB_DREAM_AFTER_GUEST");
-    return !setting || std::string_view{setting} != "0";
-}
-
 // Kaniel 2026-10-16: out of the team this save played in (removed by its leader, or it left from
 // the menu): the team's session is left where the player stands, as a guest alone in it leaves
 // (TeamJoin::LeaveAlone), and the save plays on alone: no party, its own world back from the next
@@ -2166,7 +2127,21 @@ void LeaveTeamInPlay(u64 manager) {
     const s32 matching = ReadValue<s32>(manager, 0x124);
     if (matching != 0 && !was_host) {
         // Where it stands, read while it is still the game's player (see LeaveHome).
-        leave_home = StandingPoint();
+        const u64 player = GetLocalPlayer();
+        const u64 modules = player >= 0x10000 ? ReadValue<u64>(player, 0x3B0) : 0;
+        const u64 physics = modules >= 0x10000 ? ReadValue<u64>(modules, 0x68) : 0;
+        const u32 map = GetCurrentPackedMap();
+        if (IsUsablePackedMap(map) && physics >= 0x10000 &&
+            HasMemoryAccess(physics, 0x1EC, MemoryProt::CpuRead)) {
+            leave_home = LeaveHome{
+                .map = map,
+                .x = ReadValue<float>(physics, 0x1E0),
+                .y = ReadValue<float>(physics, 0x1E4),
+                .z = ReadValue<float>(physics, 0x1E8),
+                .heading = ReadValue<float>(physics, 0x1D4),
+                .left_ms = SteadyMilliseconds(),
+            };
+        }
     }
     if (matching != 0) {
         reinterpret_cast<void PS4_SYSV_ABI (*)(u64)>(image_base +
@@ -2209,26 +2184,7 @@ void TickLeaveHome(u64 manager) {
     if (now - leave_home->idle_since_ms < LeaveHomeSettleMs) {
         return;
     }
-    LeaveHome home = *std::exchange(leave_home, std::nullopt);
-    // Out of a team on a map its own world has no lamp lit on: the Hunter's Dream (see
-    // TickDreamAfterGuest), not where it stood.
-    if (!home.to_dream && !home.late_world && DreamAfterGuest()) {
-        std::scoped_lock lock{team_mutex};
-        home.to_dream = OwnWorldHasLampOn(character_slot.load(), home.map) == false;
-    }
-    if (home.to_dream) {
-        const LampPoint& dream = LampPoints.front();
-        const u32 from = home.map;
-        home.map = dream.packed_map;
-        home.x = dream.x;
-        home.y = dream.y;
-        home.z = dream.z;
-        home.heading = dream.heading;
-        LOG_WARNING(Debug,
-                    "Co-op team world: this save's own world has no lamp lit on map {:#x}, "
-                    "where it stood after another host's world: it wakes in the Hunter's Dream",
-                    from);
-    }
+    const LeaveHome home = *std::exchange(leave_home, std::nullopt);
     const LampPoint point{.warp_point = -1,
                           .packed_map = home.map,
                           .x = home.x,
@@ -2237,144 +2193,10 @@ void TickLeaveHome(u64 manager) {
                           .heading = home.heading};
     const bool started = WarpGuestToLampPoint(point);
     LOG_INFO(Debug,
-             "Co-op team {}: {} {} (map {:#x} at {:.1f} {:.1f} "
-             "{:.1f}, {} ms after)",
-             home.to_dream      ? "world: to the Hunter's Dream"
-             : home.late_world ? "world: its own world came back after the map loaded"
-                               : "menu: out of the team",
-             started ? "its own world loads" : "the load home did not start",
-             home.to_dream ? "in the Dream" : "where it stood", home.map, home.x, home.y, home.z,
-             now - home.left_ms);
-}
-
-// Rijaak 2026-11-15 (Steam Deck): a guest's character stays where it stood when its own world
-// comes back. In a host's world ahead of its own that is a place its own world has not reached:
-// its bosses alive behind it, its doors shut, no lamp lit. So when the last of its own world is
-// back and that world has no lamp lit on the map it stands on, it wakes in the Hunter's Dream
-// instead. A map the lamp table does not know (a Chalice Dungeon) is left alone, and so is a
-// game in a session (its host: never a load under a team). BB_DREAM_AFTER_GUEST=0: where it
-// stood, as before.
-void TickDreamAfterGuest(u64 manager) {
-    if (!own_world_just_back) {
-        return;
-    }
-    const Place place = Coop::CurrentPlace();
-    if (place.state != PlaceState::Playing ||
-        SteadyMilliseconds() - place.since_ms < OwnWorldAfterLoadMs || leave_home) {
-        return;
-    }
-    own_world_just_back = false;
-    if (!DreamAfterGuest() || Coop::Invading()) {
-        return;
-    }
-    std::optional<bool> lamp;
-    {
-        std::scoped_lock lock{team_mutex};
-        lamp = OwnWorldHasLampOn(character_slot.load(), place.map);
-    }
-    if (lamp != false) {
-        return;
-    }
-    if (ReadValue<s32>(manager, 0x124) != 0 || InPartySession()) {
-        LOG_WARNING(Debug,
-                    "Co-op team world: this save's own world has no lamp lit on map {:#x}, "
-                    "where it stands; in a session: it stays",
-                    place.map);
-        return;
-    }
-    LeaveHome home;
-    home.map = place.map;
-    home.left_ms = SteadyMilliseconds();
-    home.to_dream = true;
-    leave_home = home;
-}
-
-// Where the player stands, for a load in place (LeaveHome).
-std::optional<LeaveHome> StandingPoint() {
-    const u64 player = GetLocalPlayer();
-    const u64 modules = player >= 0x10000 ? ReadValue<u64>(player, 0x3B0) : 0;
-    const u64 physics = modules >= 0x10000 ? ReadValue<u64>(modules, 0x68) : 0;
-    const u32 map = GetCurrentPackedMap();
-    if (!IsUsablePackedMap(map) || physics < 0x10000 ||
-        !HasMemoryAccess(physics, 0x1EC, MemoryProt::CpuRead)) {
-        return std::nullopt;
-    }
-    return LeaveHome{
-        .map = map,
-        .x = ReadValue<float>(physics, 0x1E0),
-        .y = ReadValue<float>(physics, 0x1E4),
-        .z = ReadValue<float>(physics, 0x1E8),
-        .heading = ReadValue<float>(physics, 0x1D4),
-        .left_ms = SteadyMilliseconds(),
-    };
-}
-
-// Rijaak 2026-11-14 (Steam Deck, 1.5.0.1): a save's own world comes back at a load's map item
-// hook (CreateMapItemsForPartyGuest, ApplyTeamWorldOnLoad), and a map without map items never
-// runs it: the Hunter's Dream. He left a team as its guest in the Dream, and started the game
-// alone there twice: the other host's world stayed in his save (the workshop on fire, the
-// lamps of a late game) with its own world still in the file, and nothing in the log. So once
-// the player stands in a map with its own world still due, it goes in here, and the map loads
-// again where the player stands if any flag changed (its events ran on the other world's).
-void TickOwnWorldAfterLoad(u64 manager) {
-    // Alone, or (Rijaak 2026-11-15) the host of a team whose world its save is about to make
-    // while another's world is still in that save (see OwnWorldStillAside).
-    bool alone = false;
-    bool host_makes = false;
-    {
-        std::scoped_lock lock{team_mutex};
-        alone = personal_world_due && !team_world_due;
-        host_makes = team_world_due && team_host && team_world && !team_world->exists();
-    }
-    if (!alone && !host_makes) {
-        return;
-    }
-    const Place place = Coop::CurrentPlace();
-    const bool in_session = ReadValue<s32>(manager, 0x124) != 0 || InPartySession();
-    if (place.state != PlaceState::Playing || place.visit == own_world_visit_checked ||
-        SteadyMilliseconds() - place.since_ms < OwnWorldAfterLoadMs || leave_home ||
-        character_slot.load() < 0 || (alone && in_session) || Coop::Invading()) {
-        return;
-    }
-    own_world_visit_checked = place.visit;
-    if (!alone) {
-        std::scoped_lock lock{team_mutex};
-        if (!OwnWorldStillAside(character_slot.load())) {
-            return;
-        }
-    }
-    own_world_changed = 0;
-    ApplyTeamWorldOnLoad();
-    bool still_due = false;
-    {
-        std::scoped_lock lock{team_mutex};
-        still_due = personal_world_due;
-    }
-    if (own_world_changed == 0) {
-        if (still_due) {
-            LOG_WARNING(Debug,
-                        "Co-op team world: slot {}'s own world is still due on map {:#x} "
-                        "(visit {}) and nothing of it went in here",
-                        character_slot.load(), place.map, place.visit);
-        }
-        return;
-    }
-    LOG_WARNING(Debug,
-                "Co-op team world: map {:#x} loaded without its own world (no map item hook "
-                "ran): {} flags put back after the load; {}",
-                place.map, own_world_changed,
-                in_session ? "in a session: the map shows it from its next load"
-                           : "the map loads again");
-    if (in_session) {
-        return; // never a load in place under a team's session
-    }
-    if (auto point = StandingPoint()) {
-        point->late_world = true;
-        leave_home = point;
-    } else {
-        LOG_WARNING(Debug, "Co-op team world: where the player stands does not read: no load "
-                           "again; the map shows its own world from its next load");
-    }
+             "Co-op team menu: out of the team: {} where it stood (map {:#x} at {:.1f} {:.1f} "
+             "{:.1f}, {} ms after the leave)",
+             started ? "its own world loads" : "the load home did not start", home.map, home.x,
+             home.y, home.z, now - home.left_ms);
 }
 
 // Tutuzaooo 2026-11-17 (Linux): a team's world goes into a save at a load's map item hook
@@ -2385,6 +2207,7 @@ void TickOwnWorldAfterLoad(u64 manager) {
 // map with the team's world come and not yet taken, it goes in here. No load again: a team's
 // session never loads in place; the headstones read the flags as they are, the map's own look
 // (the workshop) follows at its next load. BB_TEAM_WORLD_IN_DREAM=0: at the first load, as before.
+constexpr s64 TeamWorldAfterLoadMs = 1'500; // standing this long: the load's hook had its turn
 u64 team_world_visit_checked = 0;
 void TickTeamWorldAfterLoad() {
     static const bool wanted = [] {
@@ -2402,7 +2225,7 @@ void TickTeamWorldAfterLoad() {
     }
     const Place place = Coop::CurrentPlace();
     if (place.state != PlaceState::Playing || place.visit == team_world_visit_checked ||
-        SteadyMilliseconds() - place.since_ms < OwnWorldAfterLoadMs || leave_home ||
+        SteadyMilliseconds() - place.since_ms < TeamWorldAfterLoadMs || leave_home ||
         character_slot.load() < 0 || Coop::Invading()) {
         return;
     }
@@ -2687,9 +2510,7 @@ bool TickTeamJoin(bool ready) {
     // Kaniel 2026-10-16: the team menu in game: out of the team, or into it, where it stands.
     TickTeamPlay(manager);
     TickLeaveHome(manager);
-    TickOwnWorldAfterLoad(manager);
     TickTeamWorldAfterLoad();
-    TickDreamAfterGuest(manager);
     std::optional<bbcoop::TeamSession> session;
     bool in_team = false;
     bool left_in_play = false;
@@ -3092,7 +2913,6 @@ bool PutOwnWorldBack(int slot, std::string_view why) {
         return false;
     }
     const size_t changed = SetWorldFlags(*store, *own);
-    own_world_changed += changed;
     const u32 per_block = store->store.flags_per_block;
     for (const FlagBlockBits& block : store->blocks) {
         std::erase(own->blocks, block.id);
@@ -3102,7 +2922,6 @@ bool PutOwnWorldBack(int slot, std::string_view why) {
         std::error_code error;
         std::filesystem::remove(PersonalWorldFile(slot), error);
         personal_world_due = false;
-        own_world_just_back = true;
     } else {
         WriteWholeFile(PersonalWorldFile(slot), FormatWorldFlags(*own));
     }
@@ -3111,56 +2930,6 @@ bool PutOwnWorldBack(int slot, std::string_view why) {
              "changed, {} blocks to come)",
              slot, why, store->blocks.size(), changed, own->blocks.size());
     return true;
-}
-
-// Rijaak 2026-11-15 (Steam Deck, 1.5.0.2): whether this slot's save still has another's world in
-// it, its own kept aside with blocks to come (a save with a home list: one from before the lists
-// keeps the world it last played, see OldSavesWorld). He closed the game as a guest in another
-// host's late world, then hosted "A new world" twice: the save's world, the other host's, was
-// taken for this save's own (every lamp of a late game on the headstones) and reported to the
-// server as the new team's; its first load outside the Hunter's Dream would have made it the
-// save's home world and retired its own. Such a save hosts no new world and reports none until
-// its own is back. team_mutex held.
-bool OwnWorldStillAside(int slot) {
-    if (slot < 0 || !ReadHomeWorlds(slot)) {
-        return false;
-    }
-    const auto own = ParseWorldFlags(ReadWholeFile(PersonalWorldFile(slot)));
-    return own && !own->blocks.empty();
-}
-
-// Whether this save's own world has a lamp lit on `packed_map` (a lamp's active flag,
-// LampOfActiveFlag): from its world kept aside while that is in its file (another's world is in
-// the save), else from the game's flags. None for a map the lamp table does not know; the
-// Hunter's Dream always has. team_mutex held.
-std::optional<bool> OwnWorldHasLampOn(int slot, u32 packed_map) {
-    if (packed_map == LampPoints.front().packed_map) { // the Hunter's Dream
-        return true;
-    }
-    if (std::ranges::none_of(LampPoints,
-                             [&](const LampPoint& p) { return p.packed_map == packed_map; })) {
-        return std::nullopt;
-    }
-    // A lamp's entity is map * 10000 + 1950 + n, its active flag 10007810 + map * 10000 + 20 n,
-    // with map = area * 10 + block (m24_01: 241).
-    const s32 map = static_cast<s32>((packed_map >> 24) & 0xFF) * 10 +
-                    static_cast<s32>((packed_map >> 16) & 0xFF);
-    std::optional<WorldFlags> aside;
-    if (slot >= 0) {
-        aside = ParseWorldFlags(ReadWholeFile(PersonalWorldFile(slot)));
-        if (aside && aside->blocks.empty()) {
-            aside.reset();
-        }
-    }
-    for (s32 n = 0; n < 20; ++n) {
-        const s32 flag = 10007810 + map * 10000 + 20 * n;
-        const bool lit = aside ? std::ranges::find(aside->on, flag) != aside->on.end()
-                               : EventFlagOn(flag);
-        if (lit) {
-            return true;
-        }
-    }
-    return false;
 }
 
 } // namespace
@@ -3315,23 +3084,6 @@ void ApplyTeamWorldOnLoad(bool trip) {
         // the server's copy back over it, a report up to 10 s old (rig 2026-10-20, boss-refight:
         // the host's next load put back Father Gascoigne's kill it had cleared after its report).
         if (team_host) {
-            // Another's world still in this save: its own back first, never the other's made
-            // this save's and the team's (OwnWorldStillAside).
-            if (OwnWorldStillAside(slot)) {
-                if (PutOwnWorldBack(slot, "hosts a new world")) {
-                    store = ReadWorldStore();
-                    if (!store) {
-                        return;
-                    }
-                }
-                if (OwnWorldStillAside(slot)) {
-                    LOG_WARNING(Debug,
-                                "Co-op team world: slot {} hosts a new world with its own "
-                                "still aside: not made from this save until its own is back",
-                                slot);
-                    return;
-                }
-            }
             for (const FlagBlockBits& block : store->blocks) {
                 team_world_blocks.insert(block.id);
             }
@@ -3529,10 +3281,6 @@ void TickTeamWorld(s64 now_ms) {
             return;
         }
         team_world_reported_ms = now_ms;
-        // Never another's world reported as this host's (OwnWorldStillAside).
-        if (OwnWorldStillAside(character_slot.load())) {
-            return;
-        }
     }
     const auto store = ReadWorldStore();
     if (!store) {
