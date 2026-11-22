@@ -111,6 +111,16 @@ fi
 export LD_LIBRARY_PATH="$rt/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PYTHONHOME="$rt/usr/python" PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
 export QT_PLUGIN_PATH="$rt/usr/lib/qt6/plugins"
+# The bundled OpenSSL (the launcher's Python, the server, the game's links) looks for the trusted
+# roots where Ubuntu keeps them; other distros keep them elsewhere (Fedora and Bazzite in /etc/pki):
+# "unable to get local issuer certificate" on every HTTPS sign-in there. The system's bundle, first found.
+if [[ -z ${SSL_CERT_FILE:-} ]]; then
+    for ca in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt \
+              /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem; do
+        if [[ -r $ca ]]; then export SSL_CERT_FILE=$ca; break; fi
+    done
+fi
+[[ -z ${SSL_CERT_DIR:-} && -d /etc/ssl/certs ]] && export SSL_CERT_DIR=/etc/ssl/certs
 TCL_LIBRARY=$(ls -d "$rt"/usr/python/lib/tcl[89]* 2>/dev/null | head -1)
 TK_LIBRARY=$(ls -d "$rt"/usr/python/lib/tk[89]* 2>/dev/null | head -1)
 export TCL_LIBRARY TK_LIBRARY
