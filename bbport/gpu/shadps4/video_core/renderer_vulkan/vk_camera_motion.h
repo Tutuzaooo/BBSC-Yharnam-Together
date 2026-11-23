@@ -6,6 +6,7 @@
 #pragma once
 
 #include <array>
+#include <cstdlib>
 #include <vector>
 
 #include "common/types.h"
@@ -48,10 +49,19 @@ public:
 
     /// Both cameras and the scene depth of the current frame are known.
     [[nodiscard]] bool Ready() const noexcept {
-        return current.valid && previous.valid && depth_id;
+        return current.valid && previous.valid && Depth();
     }
+    /// bbport: the scene pass's depth while a later pass with no camera of its own is drawn
+    /// (see CommitFrameCamera).
     [[nodiscard]] VideoCore::ImageId Depth() const noexcept {
-        return depth_id;
+        return !pass_has_camera && kept && !TakesCameralessPass() ? kept_depth : depth_id;
+    }
+    static bool TakesCameralessPass() noexcept {
+        static const bool value = [] {
+            const char* env = std::getenv("BB_CAMERA_ORIGIN_PASS");
+            return env && env[0] == '1';
+        }();
+        return value;
     }
     /// The render size in the scene constants (the game's viewport; its targets may be
     /// allocated larger, e.g. 1916x1080 for a 1916x1078 scene), or zero before the first camera.
@@ -139,6 +149,13 @@ private:
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};
     VideoCore::ImageId depth_id{};
+    /// bbport: a later G-buffer pass with no camera of its own (the character on its own: the
+    /// equipment menu, the shops, cutscenes) after the frame's scene pass: the scene pass's depth
+    /// and camera are kept (kept_*), that pass's depth ignored for the rest of the frame.
+    VideoCore::ImageId kept_depth{};
+    Camera kept_camera;
+    bool kept = false;
+    VideoCore::ImageId ignored_depth{};
     float gbuffer_x_sign = 1.0f; ///< bbport: signs of the G-buffer viewport scales (OnGBufferPass)
     float gbuffer_y_sign = 1.0f;
 
