@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -325,9 +326,39 @@ void CameraMotion::RecordMotion(vk::ImageView depth_view, vk::ImageView motion_v
 
 void CameraMotion::OnConstants(const float* data) {
     // Scene constants: far plane 3000, 1/far, and the render size.
-    if (data[0] != 3000.0f || data[4] < 64.0f || data[5] < 64.0f ||
-        std::abs(data[1] * data[0] - 1.0f) > 1e-3f) {
+    if (data[4] < 64.0f || data[5] < 64.0f || std::abs(data[1] * data[0] - 1.0f) > 1e-3f) {
         return;
+    }
+    if (data[0] != 3000.0f) {
+        // bbport (Tutuzaooo 2026-11-23): cutscenes set a far plane of their own for some shots;
+        // their scene constants were not taken, the frame had no camera and went out unscaled
+        // (the render size stretched) for as long as the shot lasted. Another far plane is taken
+        // when the frame has no camera of 3000 yet and the render size is the scene's (a pass
+        // after the scene's keeps the scene's camera: CommitFrameCamera). BB_CAMERA_OTHER_FAR=0:
+        // only 3000, as before.
+        static const bool other_far = [] {
+            const char* env = std::getenv("BB_CAMERA_OTHER_FAR");
+            return !(env && env[0] == '0');
+        }();
+        const bool scene_size = render_size[0] == 0 ||
+                                (u32(data[4]) == render_size[0] && u32(data[5]) == render_size[1]);
+        if (!other_far || frame_has_camera || pass_has_camera || data[0] < 10.0f ||
+            data[0] > 1e6f || !scene_size) {
+            if (!frame_has_camera && !pass_has_camera) {
+                frame_rejected_far = data[0];
+            }
+            return;
+        }
+        static std::array<float, 8> told_far{};
+        static size_t told_count = 0;
+        if (told_count < told_far.size() &&
+            std::find(told_far.begin(), told_far.begin() + told_count, data[0]) ==
+                told_far.begin() + told_count) {
+            told_far[told_count++] = data[0];
+            std::printf("Camera motion: scene camera with far plane %g (not 3000: a cutscene "
+                        "shot?) taken\n",
+                        data[0]);
+        }
     }
     // bbport: the first constants of each G-buffer pass are its camera. A frame may have more
     // than one such pass (another camera before the main scene): the camera goes with the pass
@@ -480,7 +511,31 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
             std::printf("; the last pass's camera goes with its depth\n");
         }
     }
-    if (!frame_has_camera) InvalidateHistory();
+    if (!frame_has_camera) {
+        const bool had_camera = current.valid; // a frame of play before this one
+        InvalidateHistory();
+        // bbport: frames that went out with no camera (unscaled), and why, every 2 s at most.
+        if (frame_gbuffer_passes > 0) {
+            ++frames_without_camera;
+            if (frame_rejected_far != 0.0f) last_rejected_far = frame_rejected_far;
+        } else if (had_camera) {
+            ++frames_without_gbuffer;
+        }
+    }
+    if (frames_without_camera > 0 || frames_without_gbuffer > 0) {
+        static auto next = std::chrono::steady_clock::now();
+        if (const auto now = std::chrono::steady_clock::now(); now >= next) {
+            next = now + std::chrono::seconds(2);
+            std::printf("Camera motion: %u frames with a G-buffer pass but no scene camera "
+                        "(unscaled) and %u with no G-buffer pass in the last 2 s; last scene "
+                        "constants passed over: far plane %g\n",
+                        frames_without_camera, frames_without_gbuffer, last_rejected_far);
+            frames_without_camera = 0;
+            frames_without_gbuffer = 0;
+            last_rejected_far = 0.0f;
+        }
+    }
+    frame_rejected_far = 0.0f;
     frame_has_camera = false;
     pass_has_camera = false;
     committed = false;

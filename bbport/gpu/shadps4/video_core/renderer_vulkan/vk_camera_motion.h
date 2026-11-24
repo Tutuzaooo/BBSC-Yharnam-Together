@@ -138,6 +138,12 @@ private:
     ObjectMotion* object_motion = nullptr;
     Camera current, previous;
     bool frame_has_camera = false;
+    /// bbport: diagnostics of frames with no camera (OnDisplayPass): the far plane of scene
+    /// constants passed over this frame, the last one over the window, and the frame count.
+    float frame_rejected_far = 0.0f;
+    float last_rejected_far = 0.0f;
+    u32 frames_without_camera = 0;
+    u32 frames_without_gbuffer = 0;
     /// bbport: the camera of the G-buffer pass in progress (OnConstants), committed as the frame's
     /// camera once per frame (CommitFrameCamera: the motion pass or the display pass).
     Camera pass_camera;
